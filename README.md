@@ -1,121 +1,47 @@
 # SubLedger — Construction Subcontractor Compliance
 
-**Archetype:** B2B compliance tracking backend.
+**Archetype:** B2B compliance extraction, tracking, and dashboard.
 
-SubLedger processes subcontractor compliance documents (certificates of insurance,
-W-9s, bonds, waivers, and similar paperwork) and emits normalized compliance
-records that a buyer can track across its subcontractor roster.
+SubLedger processes subcontractor compliance documents (certificates of insurance, W-9s, bonds, licences, waivers) and emits normalized compliance records tracked across a subcontractor roster.
 
-## Phase 1 scope
+## Components
 
-Phase 1 is a **pure processing module**. Specifically:
+| Path | Purpose |
+|---|---|
+| `processor.py` | Core extraction and normalization. Defines `process_file(file_bytes) -> list[dict]`. |
+| `poller.py` | Railway worker. Polls Supabase `jobs` for `process_upload` jobs and calls `process_file()`. |
+| `backend/` | Processing modules copied for the Railway worker runtime. |
+| `dashboard/` | Vite + React + TypeScript SPA deployed to Vercel. |
+| `Dockerfile` | Railway build (python:3.12-slim, CMD python3 poller.py). |
+| `requirements.txt` | openai, requests, pdfplumber, openpyxl. |
 
-- **No HTTP server** is included in this phase.
-- **`poller.py` is intentionally not part of phase 1.**
-- The backend is **processing scripts only** — extraction, normalization, and
-  contract validation.
+## Endpoints
 
-The only public entry point is:
+- Domain: https://subledger-construction-subcontractor-com.vokrix.co
+- Landing: https://vokrix.co/subledger-construction-subcontractor-com
+- Railway worker: subledger-construction-subcontractor-com
 
-```text
-process_file(file_bytes: bytes) -> list[dict]
-```
+## Poller contract
 
-## `process_file()` contract
+Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `PRODUCT_ID`, `ANTHROPIC_API_KEY`.
 
-Returns a `list[dict]`. Each record has **exactly** these top-level keys:
+Loop (`poll()`, sleeps 60s):
 
-| Key | Type | Notes |
-|---|---|---|
-| `title` | `str` | The primary tracked entity (subcontractor legal name, named insured, vendor name). Never a document type or category. |
-| `status` | `str` | One of the exact allowed status strings below. |
-| `details` | `dict` | Extracted fields. Never contains a top-level `due_date` key. |
-| `due_date` | `str \| None` | ISO-8601 date string such as `2026-06-30`, or `null`. |
-
-Records are produced regardless of input format. Extraction order:
-
-1. PDF via `pdfplumber`.
-2. Excel via `openpyxl` when PDF yields no usable text.
-3. UTF-8 text/CSV fallback via `decode("utf-8", errors="ignore")`.
-4. CSV-like text is parsed row-by-row directly.
-5. Non-tabular text uses DeepSeek extraction when `DEEPSEEK_API_KEY` is set.
-6. Regex/fallback extractor when DeepSeek is unavailable or fails.
+1. `GET /rest/v1/jobs?status=eq.pending&job_type=eq.process_upload&product_id=eq.$PRODUCT_ID`
+2. Download bytes from the `uploads` bucket with both `Authorization` and `apikey` headers.
+3. `processor.process_file(file_bytes)`.
+4. Insert each record into `records` (product_id, customer_id from the job, title, status, details, source_file_path from job input_file_path, due_date).
+5. Upload the JSON result to the `results` bucket.
+6. Update the job to `completed` or `failed` with output_file_path, result_summary, completed_at.
+7. Insert a `notifications` row (type success or error).
 
 ## Allowed status strings
 
-```text
-expired:critical
-expiring_soon:warning
-non_compliant:critical
-blocked:critical
-compliant:good
-awaiting_upload:warning
-flagged:warning
-pending_review:info
-unverified:warning
-missing_coverage:critical
-partial:warning
-valid:good
-not_required:good
-```
-
-## Environment variables
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `DEEPSEEK_API_KEY` | Optional (phase 1) | Enables DeepSeek extraction (`deepseek-v4-flash`) for non-tabular documents. Demo and tests run without it. |
-| `SUPABASE_URL` | Phase 2 | Base URL for `REST_URL = os.environ["SUPABASE_URL"] + "/rest/v1"`. |
-| `SUPABASE_SERVICE_KEY` | Phase 2 | Used for Supabase Storage auth in poller work. |
-
-## Scripts
-
-| File | Purpose |
-|---|---|
-| `processor.py` | Core extraction and normalization module. Defines `process_file()`. |
-| `run_demo.py` | Zero-argument smoke test on hardcoded CSV bytes. Prints records, exits 0. |
-| `run_tests.py` | `py_compile` check plus `process_file()` record-contract validation. |
-| `requirements.txt` | Third-party dependencies: `openai`, `requests`, `pdfplumber`, `openpyxl`. |
+expired:critical, expiring_soon:warning, non_compliant:critical, blocked:critical, compliant:good, awaiting_upload:warning, flagged:warning, pending_review:info, unverified:warning, missing_coverage:critical, partial:warning, valid:good, not_required:good
 
 ## Run
 
-```text
 pip install -r requirements.txt
 python3 run_demo.py
 python3 run_tests.py
-```
-
-## Poller contract (next phase)
-
-The future `poller.py` will consume queued jobs and call `process_file()` on
-downloaded bytes. Constants preserved for that phase:
-
-```text
-REST_URL = os.environ["SUPABASE_URL"] + "/rest/v1"
-```
-
-Storage result upload path (no `results/` prefix):
-
-```text
-f"{job_id}.json"
-```
-
-Supabase Storage download and upload requests must send **both** headers:
-
-```text
-Authorization: Bearer SUPABASE_SERVICE_KEY
-apikey: SUPABASE_SERVICE_KEY
-```
-
-Uploads use the `PUT` method. The poller expects job input of the form
-`{ "job_id": str, "storage_path": str }` and writes the resulting record list
-to Storage at `f"{job_id}.json"`.
-Railway: subledger-construction-subcontractor-com
-Cloudflare: subledger-construction-subcontractor-com.vokrix.co
-
-Billing: price_1UJ0le2c9uGCcgMSmckpqg0b
-
-Landing: https://vokrix.co/subledger-construction-subcontractor-com
-
-Outreach: active
-
-Outreach: active
+python3 poller.py
