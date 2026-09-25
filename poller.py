@@ -17,7 +17,7 @@ PRODUCT_ID = os.environ.get("PRODUCT_ID", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 REST_URL = f"{SUPABASE_URL}/rest/v1"
-NOTIFICATIONS_URL = "https://njyvnmczoydsaewvfhyq.supabase.co/rest/v1/notifications"
+NOTIFICATIONS_URL = f"{REST_URL}/notifications"
 
 SB_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
