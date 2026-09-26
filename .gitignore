@@ -1,5 +1,8 @@
 *.csv
 *.json
+!package.json
+!tsconfig*.json
+!vercel.json
 venv/
 __pycache__/
 *.pyc
